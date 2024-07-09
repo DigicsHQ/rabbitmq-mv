@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"github.com/oklog/run"
 	"github.com/pkg/errors"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -15,12 +17,12 @@ import (
 )
 
 var (
-	srcURI    = flag.String("src-uri", "", `Source URI e.g. amqp://username:password@rabbitmq-fqdn:5672`)
-	srcQueue  = flag.String("src-queue", "", `Source queue name`)
-	dstURI    = flag.String("dst-uri", "", `Destination URI e.g. amqp://username:password@rabbitmq-fqdn:5672`)
-	dstQueue  = flag.String("dst-queue", "", `Destination queue name`)
-	limit     = flag.Int("limit", 0, "Limit the number of messages")
-	tx        = flag.Bool("tx", false, `Use producer transactions (slow)`)
+	srcURI   = flag.String("src-uri", "", `Source URI e.g. amqp://username:password@rabbitmq-fqdn:5672`)
+	srcQueue = flag.String("src-queue", "", `Source queue name`)
+	dstURI   = flag.String("dst-uri", "", `Destination URI e.g. amqp://username:password@rabbitmq-fqdn:5672`)
+	dstQueue = flag.String("dst-queue", "", `Destination queue name`)
+	limit    = flag.Int("limit", 0, "Limit the number of messages")
+	tx       = flag.Bool("tx", false, `Use producer transactions (slow)`)
 )
 
 type moveCommand struct {
@@ -36,12 +38,22 @@ type moveCommand struct {
 	Tx    bool
 }
 
+func (s *moveCommand) Dial(uri string) (*amqp.Connection, error) {
+	if strings.HasPrefix(uri, "amqps://") {
+		tlsConfig := new(tls.Config)
+		tlsConfig.InsecureSkipVerify = true
+		return amqp.DialTLS(uri, tlsConfig)
+	} else {
+		return amqp.Dial(uri)
+	}
+}
+
 func (s *moveCommand) Run(ctx context.Context) error {
 	if err := s.Validate(); err != nil {
 		return err
 	}
 
-	consumerConn, err := amqp.Dial(s.Source.URI)
+	consumerConn, err := s.Dial(s.Source.URI)
 	if err != nil {
 		return errors.Wrapf(err, "Cannot connect consumer to '%s'", s.Source.URI)
 	}
@@ -55,7 +67,7 @@ func (s *moveCommand) Run(ctx context.Context) error {
 	//noinspection ALL
 	defer consumerChannel.Close()
 
-	producerConn, err := amqp.Dial(s.Destination.URI)
+	producerConn, err := s.Dial(s.Destination.URI)
 	if err != nil {
 		return errors.Wrapf(err, "Cannot connect producer to '%s'", s.Destination.URI)
 	}
